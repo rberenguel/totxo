@@ -117,12 +117,12 @@
       import * as THREE from "three";
 
       // --- Configuration ---
-      const TUBE_WIDTH = 100;
+      const TUBE_WIDTH = 120;
       const TUBE_HEIGHT = 80;
       const TUBE_DEPTH = 300;
 
-      const BLOCK_GRID_X = 8;
-      const BLOCK_GRID_Y = 6;
+      const BLOCK_GRID_X = 10;
+      const BLOCK_GRID_Y = 8;
       const BLOCK_GRID_Z = 4;
 
       const BLOCK_SIZE = new THREE.Vector3(
@@ -147,8 +147,6 @@
       let isGameActive = false; // Start inactive
       let totalBlocks = 0;
       let screenShake = { intensity: 0, duration: 0, timer: 0 };
-      let touchStart = { x: 0, y: 0 };
-      let paddleStart = { x: 0, y: 0 };
       let paddleEffect = { shineTimer: 0, wobbleTimer: 0 };
       const PADDLE_EFFECT_DURATION = 0.4; // seconds for both effects
       let powerUpState = { widePaddleTimer: 0, shrinkPaddleTimer: 0 };
@@ -168,14 +166,16 @@
         scene = new THREE.Scene();
         clock = new THREE.Clock();
 
-        camera = new THREE.PerspectiveCamera(
-          75,
-          window.innerWidth / window.innerHeight,
-          0.1,
-          1000,
-        );
+        const aspect = window.innerWidth / window.innerHeight;
+        camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
         camera.position.set(0, 0, TUBE_DEPTH / 2 + 50);
         camera.lookAt(0, 0, 0);
+
+        if (aspect < 1) {
+          // Portrait
+          camera.fov = 90;
+          camera.updateProjectionMatrix();
+        }
 
         renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -619,7 +619,14 @@
 
       function addEventListeners() {
         window.addEventListener("resize", () => {
-          camera.aspect = window.innerWidth / window.innerHeight;
+          const aspect = window.innerWidth / window.innerHeight;
+          camera.aspect = aspect;
+          if (aspect < 1) {
+            // Portrait
+            camera.fov = 90;
+          } else {
+            camera.fov = 75;
+          }
           camera.updateProjectionMatrix();
           renderer.setSize(window.innerWidth, window.innerHeight);
         });
@@ -629,34 +636,11 @@
             -(event.clientY / window.innerHeight) * 2 + 1,
           ),
         );
-        window.addEventListener("touchstart", (event) => {
-          if (event.touches.length > 0) {
-            touchStart.x = event.touches[0].clientX;
-            touchStart.y = event.touches[0].clientY;
-            paddleStart.x = paddle.position.x;
-            paddleStart.y = paddle.position.y;
-          }
-        });
         window.addEventListener("touchmove", (event) => {
           if (event.touches.length > 0) {
-            const deltaX =
-              ((event.touches[0].clientX - touchStart.x) / window.innerWidth) *
-              TUBE_WIDTH;
-            const deltaY =
-              ((event.touches[0].clientY - touchStart.y) / window.innerHeight) *
-              TUBE_HEIGHT;
-            const paddleLimitX =
-              TUBE_WIDTH / 2 - (PADDLE_SIZE.x * paddle.scale.x) / 2;
-            const paddleLimitY = TUBE_HEIGHT / 2 - PADDLE_SIZE.y / 2;
-            paddle.position.x = THREE.MathUtils.clamp(
-              paddleStart.x + deltaX,
-              -paddleLimitX,
-              paddleLimitX,
-            );
-            paddle.position.y = THREE.MathUtils.clamp(
-              paddleStart.y - deltaY,
-              -paddleLimitY,
-              paddleLimitY,
+            movePaddle(
+              (event.touches[0].clientX / window.innerWidth) * 2 - 1,
+              -(event.touches[0].clientY / window.innerHeight) * 2 + 1,
             );
           }
         });
@@ -666,16 +650,27 @@
 
       function movePaddle(normX, normY) {
         if (!isGameActive) return;
+
+        // Calculate the visible plane size at the paddle's z-depth
+        const distance = camera.position.z - paddle.position.z;
+        const vFov = (camera.fov * Math.PI) / 180;
+        const visibleHeight = 2 * Math.tan(vFov / 2) * distance;
+        const visibleWidth = visibleHeight * camera.aspect;
+
+        const targetX = normX * (visibleWidth / 2);
+        const targetY = normY * (visibleHeight / 2);
+
         const paddleLimitX =
           TUBE_WIDTH / 2 - (PADDLE_SIZE.x * paddle.scale.x) / 2;
         const paddleLimitY = TUBE_HEIGHT / 2 - PADDLE_SIZE.y / 2;
+
         paddle.position.x = THREE.MathUtils.clamp(
-          normX * (TUBE_WIDTH / 2),
+          targetX,
           -paddleLimitX,
           paddleLimitX,
         );
         paddle.position.y = THREE.MathUtils.clamp(
-          normY * (TUBE_HEIGHT / 2),
+          targetY,
           -paddleLimitY,
           paddleLimitY,
         );
