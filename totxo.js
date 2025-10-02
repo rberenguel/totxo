@@ -1,8 +1,8 @@
 import * as THREE from "three";
 
 // --- Configuration ---
-const PADDLE_SENSITIVITY = 120; // How fast paddle responds to input
-const PADDLE_LERP_FACTOR = 15; // How smoothly the paddle follows the target
+const PADDLE_SENSITIVITY = 120;
+const PADDLE_LERP_FACTOR = 15;
 const TUBE_WIDTH = 120;
 const TUBE_HEIGHT = 80;
 const TUBE_DEPTH = 300;
@@ -19,8 +19,10 @@ const BLOCK_SIZE = new THREE.Vector3(
 const BALL_RADIUS = 4;
 const PADDLE_SIZE = new THREE.Vector3(20, 20, 5);
 const BALL_INITIAL_SPEED = 150;
-const SPECIAL_BLOCK_CHANCE = 0.2; // 20% chance for a block to be special
-const POWERUP_DURATION = 10; // 10 seconds for all powerups
+const SPECIAL_BLOCK_CHANCE = 0.2;
+const POWERUP_DURATION = 10;
+const UNBREAKABLE_CHANCE_PER_ROW = 0.3;
+const MAX_UNBREAKABLE_PER_ROW = 2;
 
 // --- Game State ---
 let scene, camera, renderer, clock;
@@ -31,18 +33,19 @@ let balls = [],
   powerUps = [];
 let paddle, timerBar;
 let score = 0;
-let isGameActive = false; // Start inactive
-let totalBlocks = 0;
+let highScore = localStorage.getItem("totxoHighScore") || 0;
+let isGameActive = false;
+let breakableBlocksLeft = 0;
 let screenShake = { intensity: 0, duration: 0, timer: 0 };
 let paddleEffect = { shineTimer: 0, wobbleTimer: 0 };
-const PADDLE_EFFECT_DURATION = 0.4; // seconds for both effects
+const PADDLE_EFFECT_DURATION = 0.4;
 let powerUpState = { widePaddleTimer: 0, shrinkPaddleTimer: 0 };
 let highlighters = [];
 
 // --- DOM Elements ---
-const infoElement = document.getElementById("info");
-const scoreElement = document.getElementById("score");
-const blocksLeftElement = document.getElementById("blocks-left");
+let infoElement = document.getElementById("info");
+let scoreElement = document.getElementById("score");
+let blocksLeftElement = document.getElementById("blocks-left");
 const startModal = document.getElementById("startModal");
 const playButton = document.getElementById("playButton");
 const gameOverElement = document.getElementById("gameover");
@@ -190,7 +193,6 @@ function createWorld() {
   createHighlighters();
 }
 
-// MOD: Creates four planes that form a "ring" at a specific depth (a "row")
 function createHighlighters() {
   highlighters = [];
   const material = new THREE.MeshBasicMaterial({
@@ -200,35 +202,31 @@ function createHighlighters() {
   });
   material.depthWrite = false;
 
-  const highlightDepth = BALL_RADIUS * 3; // The thickness of the 'row' highlight
+  const highlightDepth = BALL_RADIUS * 3;
 
-  // Top plane
   const horizGeo = new THREE.PlaneGeometry(TUBE_WIDTH, highlightDepth);
   const topPlane = new THREE.Mesh(horizGeo, material);
   topPlane.position.y = TUBE_HEIGHT / 2;
-  topPlane.rotation.x = -Math.PI / 2; // Rotate to be flat on the top wall
+  topPlane.rotation.x = -Math.PI / 2;
   highlighters.push(topPlane);
   scene.add(topPlane);
 
-  // Bottom plane
   const bottomPlane = new THREE.Mesh(horizGeo.clone(), material);
   bottomPlane.position.y = -TUBE_HEIGHT / 2;
-  bottomPlane.rotation.x = Math.PI / 2; // Rotate to be flat on the bottom wall
+  bottomPlane.rotation.x = Math.PI / 2;
   highlighters.push(bottomPlane);
   scene.add(bottomPlane);
 
-  // Left plane
   const vertGeo = new THREE.PlaneGeometry(highlightDepth, TUBE_HEIGHT);
   const leftPlane = new THREE.Mesh(vertGeo, material);
   leftPlane.position.x = -TUBE_WIDTH / 2;
-  leftPlane.rotation.y = Math.PI / 2; // Rotate to be flat on the left wall
+  leftPlane.rotation.y = Math.PI / 2;
   highlighters.push(leftPlane);
   scene.add(leftPlane);
 
-  // Right plane
   const rightPlane = new THREE.Mesh(vertGeo.clone(), material);
   rightPlane.position.x = TUBE_WIDTH / 2;
-  rightPlane.rotation.y = -Math.PI / 2; // Rotate to be flat on the right wall
+  rightPlane.rotation.y = -Math.PI / 2;
   highlighters.push(rightPlane);
   scene.add(rightPlane);
 }
@@ -252,20 +250,34 @@ function createBall(position, velocity) {
 function createBlocks() {
   blocks.forEach((block) => scene.remove(block));
   blocks = [];
+  breakableBlocksLeft = 0; // FIX: Reset counter correctly
 
   const blockGeo = new THREE.BoxGeometry(
     BLOCK_SIZE.x * 0.9,
     BLOCK_SIZE.y * 0.9,
     BLOCK_SIZE.z * 0.9,
   );
-  totalBlocks = 0;
 
   for (let z = 0; z < BLOCK_GRID_Z; z++) {
+    let unbreakablesOnThisLayer = 0;
     for (let y = 0; y < BLOCK_GRID_Y; y++) {
       for (let x = 0; x < BLOCK_GRID_X; x++) {
         const block = new THREE.Mesh(blockGeo);
+        const blockTypeChance = Math.random();
 
-        if (Math.random() < SPECIAL_BLOCK_CHANCE) {
+        if (
+          z < 2 &&
+          unbreakablesOnThisLayer < MAX_UNBREAKABLE_PER_ROW &&
+          Math.random() < UNBREAKABLE_CHANCE_PER_ROW
+        ) {
+          block.material = new THREE.MeshStandardMaterial({
+            color: 0x444455,
+            metalness: 0.95,
+            roughness: 0.3,
+          });
+          block.userData.isUnbreakable = true;
+          unbreakablesOnThisLayer++;
+        } else if (blockTypeChance < SPECIAL_BLOCK_CHANCE) {
           block.material = new THREE.MeshStandardMaterial({
             color: 0xffffff,
             metalness: 0.8,
@@ -274,10 +286,19 @@ function createBlocks() {
             emissiveIntensity: 0.5,
           });
           block.userData.isSpecial = true;
+          block.userData.health = 1;
           const rand = Math.random();
           if (rand < 0.33) block.userData.powerUpType = "widePaddle";
           else if (rand < 0.66) block.userData.powerUpType = "multiBall";
           else block.userData.powerUpType = "shrinkPaddle";
+        } else if (blockTypeChance < 0.5) {
+          block.userData.health = 3;
+          block.userData.isArmored = true;
+          block.material = new THREE.MeshStandardMaterial({
+            color: 0x888899,
+            metalness: 0.9,
+            roughness: 0.4,
+          });
         } else {
           const hue = z / BLOCK_GRID_Z;
           block.material = new THREE.MeshStandardMaterial({
@@ -285,6 +306,7 @@ function createBlocks() {
             metalness: 0.1,
             roughness: 0.5,
           });
+          block.userData.health = 1;
         }
 
         block.position.set(
@@ -295,7 +317,10 @@ function createBlocks() {
         block.castShadow = true;
         blocks.push(block);
         scene.add(block);
-        totalBlocks++;
+
+        if (!block.userData.isUnbreakable) {
+          breakableBlocksLeft++; // FIX: Correctly increment counter
+        }
       }
     }
   }
@@ -326,7 +351,10 @@ function resetGame() {
   paddleTargetPosition.set(0, 0);
   isGameActive = true;
   score = 0;
-  scoreElement.textContent = score;
+
+  infoElement.innerHTML = `Score: <span id="score">0</span> | Blocks: <span id="blocks-left">0</span> | High Score: <span id="highScore">${highScore}</span>`;
+  scoreElement = document.getElementById("score");
+  blocksLeftElement = document.getElementById("blocks-left");
 
   balls.forEach((b) => scene.remove(b));
   balls = [];
@@ -337,7 +365,7 @@ function resetGame() {
   paddle.scale.x = 1;
 
   createBlocks();
-  blocksLeftElement.textContent = totalBlocks;
+  blocksLeftElement.textContent = breakableBlocksLeft;
 
   const initialPos = new THREE.Vector3(
     0,
@@ -354,11 +382,9 @@ function resetGame() {
 
 function createPowerUp(position, type) {
   let color;
-  if (type === "widePaddle")
-    color = 0x00ff00; // green
-  else if (type === "multiBall")
-    color = 0xcc00ff; // purple
-  else if (type === "shrinkPaddle") color = 0xff0000; // red
+  if (type === "widePaddle") color = 0x00ff00;
+  else if (type === "multiBall") color = 0xcc00ff;
+  else if (type === "shrinkPaddle") color = 0xff0000;
 
   const powerUpGeo = new THREE.BoxGeometry(5, 5, 5);
   const powerUpMat = new THREE.MeshStandardMaterial({
@@ -378,11 +404,11 @@ function createPowerUp(position, type) {
 function activatePowerUp(type) {
   if (type === "widePaddle") {
     powerUpState.widePaddleTimer = POWERUP_DURATION;
-    powerUpState.shrinkPaddleTimer = 0; // Cancel negative effect
+    powerUpState.shrinkPaddleTimer = 0;
     paddle.scale.x = 1.5;
   } else if (type === "shrinkPaddle") {
     powerUpState.shrinkPaddleTimer = POWERUP_DURATION;
-    powerUpState.widePaddleTimer = 0; // Cancel positive effect
+    powerUpState.widePaddleTimer = 0;
     paddle.scale.x = 0.5;
   } else if (type === "multiBall" && balls.length > 0) {
     const originalBall = balls[0];
@@ -483,12 +509,26 @@ function handleCollisions() {
       const block = blocks[i];
       const blockBox = new THREE.Box3().setFromObject(block);
       if (ballBox.intersectsBox(blockBox)) {
-        if (block.userData.isSpecial) {
-          createPowerUp(block.position.clone(), block.userData.powerUpType);
+        if (!block.userData.isUnbreakable) {
+          block.userData.health--;
+
+          if (block.userData.health <= 0) {
+            if (block.userData.isSpecial) {
+              createPowerUp(block.position.clone(), block.userData.powerUpType);
+            }
+            createExplosion(block.position.clone(), block.material.color);
+            scene.remove(block);
+            blocks.splice(i, 1);
+            score += 10;
+            breakableBlocksLeft--; // FIX: Decrement correct counter
+          } else if (block.userData.isArmored) {
+            const healthPercentage = block.userData.health / 3;
+            block.material.color
+              .setHex(0x888899)
+              .lerp(new THREE.Color(0xff4444), 1 - healthPercentage);
+            score += 2;
+          }
         }
-        createExplosion(block.position.clone(), block.material.color);
-        scene.remove(block);
-        blocks.splice(i, 1);
 
         const ballCenter = ball.position.clone();
         const blockCenter = block.position.clone();
@@ -506,9 +546,8 @@ function handleCollisions() {
         else if (dy > dx && dy > dz) ballVelocity.y *= -1;
         else ballVelocity.z *= -1;
 
-        score += 10;
         scoreElement.textContent = score;
-        blocksLeftElement.textContent = blocks.length;
+        blocksLeftElement.textContent = breakableBlocksLeft;
         break;
       }
     }
@@ -527,17 +566,22 @@ function handleCollisions() {
     }
   }
 
-  if (balls.length === 0 && isGameActive) {
+  const gameOver =
+    (balls.length === 0 || breakableBlocksLeft <= 0) && isGameActive;
+  if (gameOver) {
     isGameActive = false;
     infoElement.style.display = "none";
+
+    if (score > highScore) {
+      highScore = score;
+      localStorage.setItem("totxoHighScore", highScore);
+      gameOverTitle.textContent = "New High Score!";
+    } else {
+      gameOverTitle.textContent =
+        breakableBlocksLeft <= 0 ? "You Win!" : "Game Over";
+    }
+
     finalScoreElement.textContent = score;
-    gameOverTitle.textContent = "Game Over";
-    gameOverElement.style.display = "block";
-  } else if (blocks.length === 0 && isGameActive) {
-    isGameActive = false;
-    infoElement.style.display = "none";
-    finalScoreElement.textContent = score;
-    gameOverTitle.textContent = "You Win!";
     gameOverElement.style.display = "block";
   }
 }
@@ -602,7 +646,7 @@ function updatePowerUpTimers(delta) {
     powerUpState.widePaddleTimer -= delta;
     timerIsActive = true;
     progress = powerUpState.widePaddleTimer / POWERUP_DURATION;
-    timerBar.material.color.setHex(0x00ff00); // Green
+    timerBar.material.color.setHex(0x00ff00);
     if (powerUpState.widePaddleTimer <= 0) {
       paddle.scale.x = 1;
     }
@@ -610,7 +654,7 @@ function updatePowerUpTimers(delta) {
     powerUpState.shrinkPaddleTimer -= delta;
     timerIsActive = true;
     progress = powerUpState.shrinkPaddleTimer / POWERUP_DURATION;
-    timerBar.material.color.setHex(0xff0000); // Red
+    timerBar.material.color.setHex(0xff0000);
     if (powerUpState.shrinkPaddleTimer <= 0) {
       paddle.scale.x = 1;
     }
@@ -629,7 +673,6 @@ function animate() {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
 
-  // MOD: Update highlighter visibility and Z position to match the ball
   const shouldBeVisible = isGameActive && balls.length > 0;
   if (highlighters.length > 0) {
     if (shouldBeVisible) {
@@ -646,7 +689,6 @@ function animate() {
   }
 
   if (isGameActive) {
-    // Smoothly move paddle towards the target position
     const lerpFactor = 1 - Math.exp(-PADDLE_LERP_FACTOR * delta);
     paddle.position.x = THREE.MathUtils.lerp(
       paddle.position.x,
