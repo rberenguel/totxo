@@ -37,6 +37,7 @@ let screenShake = { intensity: 0, duration: 0, timer: 0 };
 let paddleEffect = { shineTimer: 0, wobbleTimer: 0 };
 const PADDLE_EFFECT_DURATION = 0.4; // seconds for both effects
 let powerUpState = { widePaddleTimer: 0, shrinkPaddleTimer: 0 };
+let highlighters = [];
 
 // --- DOM Elements ---
 const infoElement = document.getElementById("info");
@@ -59,7 +60,6 @@ function init() {
   camera.lookAt(0, 0, 0);
 
   if (aspect < 1) {
-    // Portrait
     camera.fov = 90;
     camera.updateProjectionMatrix();
   }
@@ -186,6 +186,51 @@ function createWorld() {
   timerBar.position.y = PADDLE_SIZE.y / 2 + 2;
   timerBar.visible = false;
   paddle.add(timerBar);
+
+  createHighlighters();
+}
+
+// MOD: Creates four planes that form a "ring" at a specific depth (a "row")
+function createHighlighters() {
+  highlighters = [];
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.08,
+  });
+  material.depthWrite = false;
+
+  const highlightDepth = BALL_RADIUS * 3; // The thickness of the 'row' highlight
+
+  // Top plane
+  const horizGeo = new THREE.PlaneGeometry(TUBE_WIDTH, highlightDepth);
+  const topPlane = new THREE.Mesh(horizGeo, material);
+  topPlane.position.y = TUBE_HEIGHT / 2;
+  topPlane.rotation.x = -Math.PI / 2; // Rotate to be flat on the top wall
+  highlighters.push(topPlane);
+  scene.add(topPlane);
+
+  // Bottom plane
+  const bottomPlane = new THREE.Mesh(horizGeo.clone(), material);
+  bottomPlane.position.y = -TUBE_HEIGHT / 2;
+  bottomPlane.rotation.x = Math.PI / 2; // Rotate to be flat on the bottom wall
+  highlighters.push(bottomPlane);
+  scene.add(bottomPlane);
+
+  // Left plane
+  const vertGeo = new THREE.PlaneGeometry(highlightDepth, TUBE_HEIGHT);
+  const leftPlane = new THREE.Mesh(vertGeo, material);
+  leftPlane.position.x = -TUBE_WIDTH / 2;
+  leftPlane.rotation.y = Math.PI / 2; // Rotate to be flat on the left wall
+  highlighters.push(leftPlane);
+  scene.add(leftPlane);
+
+  // Right plane
+  const rightPlane = new THREE.Mesh(vertGeo.clone(), material);
+  rightPlane.position.x = TUBE_WIDTH / 2;
+  rightPlane.rotation.y = -Math.PI / 2; // Rotate to be flat on the right wall
+  highlighters.push(rightPlane);
+  scene.add(rightPlane);
 }
 
 function createBall(position, velocity) {
@@ -502,7 +547,6 @@ function addEventListeners() {
     const aspect = window.innerWidth / window.innerHeight;
     camera.aspect = aspect;
     if (aspect < 1) {
-      // Portrait
       camera.fov = 90;
     } else {
       camera.fov = 75;
@@ -527,15 +571,14 @@ function addEventListeners() {
   playButton.addEventListener("click", resetGame);
   restartButton.addEventListener("click", resetGame);
 }
+
 function movePaddle(normX, normY) {
   if (!isGameActive) return;
 
   const targetX = normX * PADDLE_SENSITIVITY;
   const targetY = normY * PADDLE_SENSITIVITY;
 
-  const paddleRadius = 4; // Define radius locally for calculation
-  //const paddleLimitX =
-  //TUBE_WIDTH / 2 - (PADDLE_SIZE.x * paddle.scale.x) / 2 + paddleRadius;
+  const paddleRadius = 4;
   const paddleLimitX = TUBE_WIDTH / 2 - (PADDLE_SIZE.x * 1) / 2 + paddleRadius;
   const paddleLimitY = TUBE_HEIGHT / 2 - PADDLE_SIZE.y / 2 + paddleRadius;
 
@@ -545,75 +588,6 @@ function movePaddle(normX, normY) {
     paddleLimitX,
   );
   paddleTargetPosition.y = THREE.MathUtils.clamp(
-    targetY,
-    -paddleLimitY,
-    paddleLimitY,
-  );
-}
-
-function movePaddle3(normX, normY) {
-  if (!isGameActive) return;
-
-  const targetX = normX * PADDLE_SENSITIVITY;
-  const targetY = normY * PADDLE_SENSITIVITY;
-
-  const paddleLimitX = TUBE_WIDTH / 2 - (PADDLE_SIZE.x * paddle.scale.x) / 2;
-  const paddleLimitY = TUBE_HEIGHT / 2 - PADDLE_SIZE.y / 2;
-
-  paddleTargetPosition.x = THREE.MathUtils.clamp(
-    targetX,
-    -paddleLimitX,
-    paddleLimitX,
-  );
-  paddleTargetPosition.y = THREE.MathUtils.clamp(
-    targetY,
-    -paddleLimitY,
-    paddleLimitY,
-  );
-}
-
-function movePaddle2(normX, normY) {
-  if (!isGameActive) return;
-
-  const targetX = normX * (TUBE_WIDTH / 2);
-  const targetY = normY * (TUBE_HEIGHT / 2);
-
-  const paddleLimitX = TUBE_WIDTH / 2 - (PADDLE_SIZE.x * paddle.scale.x) / 2;
-  const paddleLimitY = TUBE_HEIGHT / 2 - PADDLE_SIZE.y / 2;
-
-  paddle.position.x = THREE.MathUtils.clamp(
-    targetX,
-    -paddleLimitX,
-    paddleLimitX,
-  );
-  paddle.position.y = THREE.MathUtils.clamp(
-    targetY,
-    -paddleLimitY,
-    paddleLimitY,
-  );
-}
-
-function movePaddle1(normX, normY) {
-  if (!isGameActive) return;
-
-  // Calculate the visible plane size at the paddle's z-depth
-  const distance = camera.position.z - paddle.position.z;
-  const vFov = (camera.fov * Math.PI) / 180;
-  const visibleHeight = 2 * Math.tan(vFov / 2) * distance;
-  const visibleWidth = visibleHeight * camera.aspect;
-
-  const targetX = normX * (visibleWidth / 2);
-  const targetY = normY * (visibleHeight / 2);
-
-  const paddleLimitX = TUBE_WIDTH / 2 - (PADDLE_SIZE.x * paddle.scale.x) / 2;
-  const paddleLimitY = TUBE_HEIGHT / 2 - PADDLE_SIZE.y / 2;
-
-  paddle.position.x = THREE.MathUtils.clamp(
-    targetX,
-    -paddleLimitX,
-    paddleLimitX,
-  );
-  paddle.position.y = THREE.MathUtils.clamp(
     targetY,
     -paddleLimitY,
     paddleLimitY,
@@ -654,6 +628,22 @@ function updatePowerUpTimers(delta) {
 function animate() {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
+
+  // MOD: Update highlighter visibility and Z position to match the ball
+  const shouldBeVisible = isGameActive && balls.length > 0;
+  if (highlighters.length > 0) {
+    if (shouldBeVisible) {
+      const mainBall = balls[0];
+      highlighters.forEach((h) => {
+        h.position.z = mainBall.position.z;
+        h.visible = true;
+      });
+    } else {
+      highlighters.forEach((h) => {
+        h.visible = false;
+      });
+    }
+  }
 
   if (isGameActive) {
     // Smoothly move paddle towards the target position
