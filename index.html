@@ -53,18 +53,18 @@
         box-shadow:
           0 0 25px rgba(0, 255, 255, 0.6),
           inset 0 0 15px rgba(0, 255, 255, 0.4);
+				width: 60vw;
       }
       .modal h1 {
         font-family: "SixtyFour", sans-serif;
-        font-size: 4rem;
-        margin-bottom: 2rem;
+        font-size: 2rem;
+        margin-bottom: 1rem;
         color: #fff;
         text-shadow:
-          0 0 5px #fff,
-          0 0 10px #fff,
-          0 0 20px #00ffff,
-          0 0 30px #00ffff,
-          0 0 40px #00ffff;
+          0 0 2px #fff,
+          0 0 4px #fff,
+          0 0 8px #00ffff,
+          0 0 16px #00ffff;
       }
       .modal button {
         background-color: rgba(0, 255, 255, 0.1);
@@ -171,7 +171,7 @@ const PADDLE_LERP_FACTOR = 15;  // How smoothly the paddle follows the target
 
         const aspect = window.innerWidth / window.innerHeight;
         camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
-        camera.position.set(0, 0, TUBE_DEPTH / 2 + 150);
+        camera.position.set(0, 0, TUBE_DEPTH / 2 + 120);
         camera.lookAt(0, 0, 0);
 
         if (aspect < 1) {
@@ -659,9 +659,11 @@ paddleTargetPosition.set(0, 0);
         const targetY = normY * PADDLE_SENSITIVITY;
 
         const paddleRadius = 4; // Define radius locally for calculation
+        //const paddleLimitX =
+          //TUBE_WIDTH / 2 - (PADDLE_SIZE.x * paddle.scale.x) / 2 + paddleRadius;
         const paddleLimitX =
-          TUBE_WIDTH / 2 - (PADDLE_SIZE.x * paddle.scale.x) / 2 + paddleRadius;
-        const paddleLimitY =
+				TUBE_WIDTH / 2 - (PADDLE_SIZE.x * 1) / 2 + paddleRadius;
+					const paddleLimitY =
           TUBE_HEIGHT / 2 - PADDLE_SIZE.y / 2 + paddleRadius;
 
         paddleTargetPosition.x = THREE.MathUtils.clamp(
