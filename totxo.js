@@ -11,6 +11,18 @@ const BLOCK_GRID_X = 10;
 const BLOCK_GRID_Y = 8;
 const BLOCK_GRID_Z = 4;
 
+
+const SPIN_FACTOR = 0.08; // How much paddle velocity translates to spin
+const MAX_SPIN = 60; // Maximum spin magnitude
+const MAGNUS_COEFFICIENT = 0.0001; // Strength of the curve effect
+const SPIN_BOUNCE_EFFECT = 0.1; // How much spin affects wall rebounds
+const SPIN_DECAY = 0.1; // How quickly spin wears off over time
+const SPIN_POWER_THRESHOLD = MAX_SPIN * 0.5; // Spin needed to activate power mode
+const POWER_COLOR = 0xff6600; // Fiery orange color for power mode
+const SPIN_DAMPEN_ON_COLLISION = 0.95; // Percentage of spin retained after a non-paddle collision
+const VISUAL_SPIN_MULTIPLIER = 0.03; // How fast the ball mesh rotates visually
+
+
 const BLOCK_SIZE = new THREE.Vector3(
   TUBE_WIDTH / BLOCK_GRID_X,
   TUBE_HEIGHT / BLOCK_GRID_Y,
@@ -21,12 +33,13 @@ const PADDLE_SIZE = new THREE.Vector3(20, 20, 5);
 const BALL_INITIAL_SPEED = 150;
 const SPECIAL_BLOCK_CHANCE = 0.2;
 const POWERUP_DURATION = 10;
-const UNBREAKABLE_CHANCE_PER_ROW = 0.3;
-const MAX_UNBREAKABLE_PER_ROW = 2;
+const GUARANTEED_UNBREAKABLE_PER_LAYER = 3;
 
 // --- Game State ---
+
 let scene, camera, renderer, clock;
 let paddleTargetPosition = new THREE.Vector2();
+let paddleLastPosition = new THREE.Vector3(); // Add this line
 let balls = [],
   blocks = [],
   particles = [],
@@ -177,6 +190,7 @@ function createWorld() {
   paddle = new THREE.Mesh(paddleGeometry, paddleMaterial);
   paddle.position.z = TUBE_DEPTH / 2 - 20;
   paddle.castShadow = true;
+  paddle.userData.velocity = new THREE.Vector3();
   scene.add(paddle);
 
   const timerBarGeo = new THREE.BoxGeometry(
@@ -243,6 +257,21 @@ function createBall(position, velocity) {
   ball.castShadow = true;
   ball.position.copy(position);
   ball.userData.velocity = velocity;
+  ball.userData.spin = new THREE.Vector3(0, 0, 0);
+
+  // --- Add Spin Helper ---
+  const helperGeo = new THREE.TorusGeometry(BALL_RADIUS * 1.2, 1, 3, 24);
+  const helperMat = new THREE.MeshBasicMaterial({
+    color: 0xff00ff,
+    transparent: false,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const spinHelper = new THREE.Mesh(helperGeo, helperMat);
+  ball.userData.spinHelper = spinHelper; // Store reference to helper
+  ball.add(spinHelper); // Attach helper as a child of the ball
+
   balls.push(ball);
   scene.add(ball);
 }
@@ -250,7 +279,7 @@ function createBall(position, velocity) {
 function createBlocks() {
   blocks.forEach((block) => scene.remove(block));
   blocks = [];
-  breakableBlocksLeft = 0; // FIX: Reset counter correctly
+  breakableBlocksLeft = 0; // Reset counter correctly
 
   const blockGeo = new THREE.BoxGeometry(
     BLOCK_SIZE.x * 0.9,
@@ -259,24 +288,40 @@ function createBlocks() {
   );
 
   for (let z = 0; z < BLOCK_GRID_Z; z++) {
-    let unbreakablesOnThisLayer = 0;
+    // --- Pre-select unbreakable block positions for this layer ---
+    const unbreakablePositions = new Set();
+    // This logic now correctly applies ONLY to the layers that can have unbreakables
+    if (true) {
+      const totalPositions = BLOCK_GRID_X * BLOCK_GRID_Y;
+      const allPositions = Array.from(Array(totalPositions).keys());
+
+      // Shuffle the positions array
+      for (let i = allPositions.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allPositions[i], allPositions[j]] = [allPositions[j], allPositions[i]];
+      }
+
+      // Take the first N positions for our unbreakable blocks
+      for (let i = 0; i < GUARANTEED_UNBREAKABLE_PER_LAYER; i++) {
+        unbreakablePositions.add(allPositions[i]);
+      }
+    }
+
     for (let y = 0; y < BLOCK_GRID_Y; y++) {
       for (let x = 0; x < BLOCK_GRID_X; x++) {
         const block = new THREE.Mesh(blockGeo);
         const blockTypeChance = Math.random();
+        const currentIndex = y * BLOCK_GRID_X + x;
 
-        if (
-          z < 2 &&
-          unbreakablesOnThisLayer < MAX_UNBREAKABLE_PER_ROW &&
-          Math.random() < UNBREAKABLE_CHANCE_PER_ROW
-        ) {
+        // --- Use the pre-selected positions to create WHITE unbreakables ---
+        if (unbreakablePositions.has(currentIndex)) {
           block.material = new THREE.MeshStandardMaterial({
-            color: 0x444455,
-            metalness: 0.95,
-            roughness: 0.3,
+            color: 0xff0000, // White for max visibility
+            metalness: 0.1,
+            roughness: 0.4,
           });
           block.userData.isUnbreakable = true;
-          unbreakablesOnThisLayer++;
+          block.userData.health = 5;
         } else if (blockTypeChance < SPECIAL_BLOCK_CHANCE) {
           block.material = new THREE.MeshStandardMaterial({
             color: 0xffffff,
@@ -301,8 +346,12 @@ function createBlocks() {
           });
         } else {
           const hue = z / BLOCK_GRID_Z;
+          let blockColor = new THREE.Color().setHSL(hue, 0.8, 0.6);
+          if (hue === 0) { // Fix for the red/black issue
+            blockColor.setHex(0xff4444);
+          }
           block.material = new THREE.MeshStandardMaterial({
-            color: new THREE.Color().setHSL(hue, 0.8, 0.6),
+            color: blockColor,
             metalness: 0.1,
             roughness: 0.5,
           });
@@ -319,7 +368,7 @@ function createBlocks() {
         scene.add(block);
 
         if (!block.userData.isUnbreakable) {
-          breakableBlocksLeft++; // FIX: Correctly increment counter
+          breakableBlocksLeft++;
         }
       }
     }
@@ -472,12 +521,31 @@ function handleCollisions() {
   for (let b = balls.length - 1; b >= 0; b--) {
     const ball = balls[b];
     const ballVelocity = ball.userData.velocity;
+    const ballSpin = ball.userData.spin;
 
-    if (Math.abs(ball.position.x) > TUBE_WIDTH / 2 - BALL_RADIUS)
+    // --- Wall Collisions with Spin ---
+    if (Math.abs(ball.position.x) > TUBE_WIDTH / 2 - BALL_RADIUS) {
       ballVelocity.x *= -1;
-    if (Math.abs(ball.position.y) > TUBE_HEIGHT / 2 - BALL_RADIUS)
+      ballVelocity.y += ballSpin.z * SPIN_BOUNCE_EFFECT;
+      ballVelocity.z -= ballSpin.y * SPIN_BOUNCE_EFFECT;
+      ball.position.x =
+        (TUBE_WIDTH / 2 - BALL_RADIUS) * Math.sign(ball.position.x);
+      ballSpin.multiplyScalar(SPIN_DAMPEN_ON_COLLISION); // Dampen spin
+    }
+    if (Math.abs(ball.position.y) > TUBE_HEIGHT / 2 - BALL_RADIUS) {
       ballVelocity.y *= -1;
-    if (ball.position.z < -TUBE_DEPTH / 2 + BALL_RADIUS) ballVelocity.z *= -1;
+      ballVelocity.x -= ballSpin.z * SPIN_BOUNCE_EFFECT;
+      ballVelocity.z += ballSpin.x * SPIN_BOUNCE_EFFECT;
+      ball.position.y =
+        (TUBE_HEIGHT / 2 - BALL_RADIUS) * Math.sign(ball.position.y);
+      ballSpin.multiplyScalar(SPIN_DAMPEN_ON_COLLISION); // Dampen spin
+    }
+    if (ball.position.z < -TUBE_DEPTH / 2 + BALL_RADIUS) {
+      ballVelocity.z *= -1;
+      ballVelocity.x += ballSpin.y * SPIN_BOUNCE_EFFECT;
+      ballVelocity.y -= ballSpin.x * SPIN_BOUNCE_EFFECT;
+      ballSpin.multiplyScalar(SPIN_DAMPEN_ON_COLLISION); // Dampen spin
+    }
 
     const ballBox = new THREE.Box3().setFromObject(ball);
     if (ballVelocity.z > 0 && ballBox.intersectsBox(paddleBox)) {
@@ -486,22 +554,18 @@ function handleCollisions() {
       paddleEffect.wobbleTimer = PADDLE_EFFECT_DURATION;
       ballVelocity.z *= -1.02;
 
-      const paddleRadius = 4;
-      const flatWidth = PADDLE_SIZE.x * paddle.scale.x - 2 * paddleRadius;
-      const flatHeight = PADDLE_SIZE.y - 2 * paddleRadius;
+      // --- Impart Spin from Paddle ---
+      const spinInfluence = paddle.userData.velocity.clone();
+      spinInfluence.z = 0; // Only use X and Y paddle movement for spin
+      ball.userData.spin
+        .add(spinInfluence.multiplyScalar(SPIN_FACTOR))
+        .clampLength(0, MAX_SPIN);
+
       const hitPointX = ball.position.x - paddle.position.x;
       const hitPointY = ball.position.y - paddle.position.y;
+      ballVelocity.x += hitPointX * 0.1;
+      ballVelocity.y += hitPointY * 0.1;
 
-      if (
-        Math.abs(hitPointX) < flatWidth / 2 &&
-        Math.abs(hitPointY) < flatHeight / 2
-      ) {
-        ballVelocity.x += hitPointX * 0.1;
-        ballVelocity.y += hitPointY * 0.1;
-      } else {
-        ballVelocity.x += hitPointX * 0.2;
-        ballVelocity.y += hitPointY * 0.2;
-      }
       ballVelocity.normalize().multiplyScalar(BALL_INITIAL_SPEED);
     }
 
@@ -509,8 +573,22 @@ function handleCollisions() {
       const block = blocks[i];
       const blockBox = new THREE.Box3().setFromObject(block);
       if (ballBox.intersectsBox(blockBox)) {
-        if (!block.userData.isUnbreakable) {
+        // --- NEW: Power Mode Logic ---
+        if (block.userData.isUnbreakable && !ball.userData.isPowered) {
+          // If block is unbreakable AND ball is NOT powered, treat it like a simple bounce
+        } else {
+          // Otherwise, the block can take damage
           block.userData.health--;
+
+          if (block.userData.isUnbreakable) {
+            // Damaging an unbreakable block
+            const healthPercentage = block.userData.health / 5;
+  block.material.color
+    .setHex(0xff0000) // Red
+    .lerp(new THREE.Color(POWER_COLOR), 1 - healthPercentage);
+  score += 5; // Bonus points!
+
+          }
 
           if (block.userData.health <= 0) {
             if (block.userData.isSpecial) {
@@ -519,8 +597,10 @@ function handleCollisions() {
             createExplosion(block.position.clone(), block.material.color);
             scene.remove(block);
             blocks.splice(i, 1);
-            score += 10;
-            breakableBlocksLeft--; // FIX: Decrement correct counter
+            score += block.userData.isUnbreakable ? 50 : 10; // Big bonus for unbreakables
+            if (!block.userData.isUnbreakable) {
+              breakableBlocksLeft--;
+            }
           } else if (block.userData.isArmored) {
             const healthPercentage = block.userData.health / 3;
             block.material.color
@@ -542,9 +622,22 @@ function handleCollisions() {
         const dy = Math.abs(delta.y) / halfSize.y;
         const dz = Math.abs(delta.z) / halfSize.z;
 
-        if (dx > dy && dx > dz) ballVelocity.x *= -1;
-        else if (dy > dx && dy > dz) ballVelocity.y *= -1;
-        else ballVelocity.z *= -1;
+        // --- BUG FIX: Apply spin effect to block collisions ---
+        if (dx > dy && dx > dz) {
+          ballVelocity.x *= -1;
+          ballVelocity.y += ballSpin.z * SPIN_BOUNCE_EFFECT;
+          ballVelocity.z -= ballSpin.y * SPIN_BOUNCE_EFFECT;
+        } else if (dy > dx && dy > dz) {
+          ballVelocity.y *= -1;
+          ballVelocity.x -= ballSpin.z * SPIN_BOUNCE_EFFECT;
+          ballVelocity.z += ballSpin.x * SPIN_BOUNCE_EFFECT;
+        } else {
+          ballVelocity.z *= -1;
+          ballVelocity.x += ballSpin.y * SPIN_BOUNCE_EFFECT;
+          ballVelocity.y -= ballSpin.x * SPIN_BOUNCE_EFFECT;
+        }
+
+        ballSpin.multiplyScalar(SPIN_DAMPEN_ON_COLLISION); // Dampen spin
 
         scoreElement.textContent = score;
         blocksLeftElement.textContent = breakableBlocksLeft;
@@ -689,6 +782,12 @@ function animate() {
   }
 
   if (isGameActive) {
+    // Calculate paddle velocity
+    paddle.userData.velocity
+      .subVectors(paddle.position, paddleLastPosition)
+      .divideScalar(delta);
+    paddleLastPosition.copy(paddle.position);
+
     const lerpFactor = 1 - Math.exp(-PADDLE_LERP_FACTOR * delta);
     paddle.position.x = THREE.MathUtils.lerp(
       paddle.position.x,
@@ -704,7 +803,45 @@ function animate() {
 
     for (let i = balls.length - 1; i >= 0; i--) {
       const ball = balls[i];
-      ball.position.add(ball.userData.velocity.clone().multiplyScalar(delta));
+      const spin = ball.userData.spin;
+      const velocity = ball.userData.velocity;
+      const spinHelper = ball.userData.spinHelper;
+      // --- NEW: Check for "Hot Spin" Power Up ---
+      const isPowered = spin.length() >= SPIN_POWER_THRESHOLD;
+      ball.userData.isPowered = isPowered;
+      if (isPowered) {
+        ball.material.emissive.setHex(POWER_COLOR);
+        spinHelper.material.color.setHex(POWER_COLOR);
+      } else {
+        ball.material.emissive.setHex(0x000000); // Reset emissive
+        spinHelper.material.color.setHex(0x00ffff); // Reset helper color
+      }
+      // Apply Magnus Force (curve) and Spin Decay
+      if (spin.length() > 0.1) {
+        const magnusForce = new THREE.Vector3().crossVectors(spin, velocity);
+        magnusForce.multiplyScalar(MAGNUS_COEFFICIENT);
+        velocity.add(magnusForce);
+        spin.multiplyScalar(1 - SPIN_DECAY * delta);
+
+        // --- VISUALIZE SPIN ---
+        // 1. Rotate the ball mesh
+        const rotationAngle = spin.length() * VISUAL_SPIN_MULTIPLIER;
+        const rotationAxis = spin.clone().normalize();
+        const quaternion = new THREE.Quaternion().setFromAxisAngle(
+          rotationAxis,
+          rotationAngle,
+        );
+        ball.quaternion.premultiply(quaternion);
+
+        // 2. Update the helper ring
+        const spinMagnitude = Math.min(spin.length() / MAX_SPIN, 1.0);
+        spinHelper.material.opacity = Math.sqrt(spinMagnitude) * 0.85;
+        spinHelper.lookAt(spin.clone().add(ball.position)); // Orient the ring
+      } else {
+        spinHelper.material.opacity = 0; // Hide if no spin
+      }
+
+      ball.position.add(velocity.clone().multiplyScalar(delta));
       if (ball.position.z > TUBE_DEPTH / 2 + 20) {
         scene.remove(ball);
         balls.splice(i, 1);
