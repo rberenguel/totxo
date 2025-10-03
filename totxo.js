@@ -59,7 +59,7 @@ function init() {
 
   const aspect = window.innerWidth / window.innerHeight;
   camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
-  camera.position.set(0, 0, TUBE_DEPTH / 2 + 120);
+  camera.position.set(0, 0, TUBE_DEPTH / 2 + 60);
   camera.lookAt(0, 0, 0);
 
   if (aspect < 1) {
@@ -774,4 +774,4 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-init();
+init(); 
