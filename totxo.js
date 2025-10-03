@@ -2,10 +2,16 @@ import * as THREE from "three";
 
 // --- Configuration ---
 const PADDLE_SENSITIVITY = 120;
+const TOUCH_SENSITIVITY = 0.5;
 const PADDLE_LERP_FACTOR = 15;
 const TUBE_WIDTH = 120;
 const TUBE_HEIGHT = 80;
 const TUBE_DEPTH = 300;
+
+// --- Time Dilation Configuration ---
+const TIME_DILATION_ZONE_DEPTH = 110; // How close the ball needs to be to the paddle to slow down
+const TIME_DILATION_FACTOR = 0.3; // How much the ball slows down (0.4 = 40% of normal speed)
+const TIME_DILATION_BOOST = 1.1; // Speed boost after hitting the paddle to compensate for slowdown
 
 const BLOCK_GRID_X = 10;
 const BLOCK_GRID_Y = 8;
@@ -29,7 +35,7 @@ const BLOCK_SIZE = new THREE.Vector3(
   15,
 );
 const BALL_RADIUS = 4;
-const PADDLE_SIZE = new THREE.Vector3(20, 20, 5);
+const PADDLE_SIZE = new THREE.Vector3(20, 20, 1);
 const BALL_INITIAL_SPEED = 150;
 const SPECIAL_BLOCK_CHANCE = 0.2;
 const POWERUP_DURATION = 10;
@@ -54,6 +60,13 @@ let paddleEffect = { shineTimer: 0, wobbleTimer: 0 };
 const PADDLE_EFFECT_DURATION = 0.4;
 let powerUpState = { widePaddleTimer: 0, shrinkPaddleTimer: 0 };
 let highlighters = [];
+// --- NEW: Variables for relative touch controls ---
+let touchStartX = 0,
+  touchStartY = 0,
+  isPointerDown = false,
+  paddleInitialX = 0,
+  paddleInitialY = 0;
+
 
 // --- DOM Elements ---
 let infoElement = document.getElementById("info");
@@ -188,7 +201,7 @@ function createWorld() {
     opacity: 0.75,
   });
   paddle = new THREE.Mesh(paddleGeometry, paddleMaterial);
-  paddle.position.z = TUBE_DEPTH / 2 - 20;
+  paddle.position.z = TUBE_DEPTH / 2 - 10;
   paddle.castShadow = true;
   paddle.userData.velocity = new THREE.Vector3();
   scene.add(paddle);
@@ -396,7 +409,7 @@ function resetGame() {
   gameOverElement.style.display = "none";
   infoElement.style.display = "block";
 
-  paddle.position.set(0, 0, TUBE_DEPTH / 2 - 20);
+  paddle.position.set(0, 0, TUBE_DEPTH / 2 - 5);
   paddleTargetPosition.set(0, 0);
   isGameActive = true;
   score = 0;
@@ -552,7 +565,8 @@ function handleCollisions() {
       triggerScreenShake(0.5, 0.2);
       paddleEffect.shineTimer = PADDLE_EFFECT_DURATION;
       paddleEffect.wobbleTimer = PADDLE_EFFECT_DURATION;
-      ballVelocity.z *= -1.02;
+      // --- MODIFIED: Apply speed boost on paddle hit ---
+      ballVelocity.z *= -1.02 * TIME_DILATION_BOOST;
 
       // --- Impart Spin from Paddle ---
       const spinInfluence = paddle.userData.velocity.clone();
@@ -573,43 +587,9 @@ function handleCollisions() {
       const block = blocks[i];
       const blockBox = new THREE.Box3().setFromObject(block);
       if (ballBox.intersectsBox(blockBox)) {
-        // --- NEW: Power Mode Logic ---
-        if (block.userData.isUnbreakable && !ball.userData.isPowered) {
-          // If block is unbreakable AND ball is NOT powered, treat it like a simple bounce
-        } else {
-          // Otherwise, the block can take damage
-          block.userData.health--;
+        // --- MODIFIED: Bug fix for ball passing through blocks ---
 
-          if (block.userData.isUnbreakable) {
-            // Damaging an unbreakable block
-            const healthPercentage = block.userData.health / 5;
-  block.material.color
-    .setHex(0xff0000) // Red
-    .lerp(new THREE.Color(POWER_COLOR), 1 - healthPercentage);
-  score += 5; // Bonus points!
-
-          }
-
-          if (block.userData.health <= 0) {
-            if (block.userData.isSpecial) {
-              createPowerUp(block.position.clone(), block.userData.powerUpType);
-            }
-            createExplosion(block.position.clone(), block.material.color);
-            scene.remove(block);
-            blocks.splice(i, 1);
-            score += block.userData.isUnbreakable ? 50 : 10; // Big bonus for unbreakables
-            if (!block.userData.isUnbreakable) {
-              breakableBlocksLeft--;
-            }
-          } else if (block.userData.isArmored) {
-            const healthPercentage = block.userData.health / 3;
-            block.material.color
-              .setHex(0x888899)
-              .lerp(new THREE.Color(0xff4444), 1 - healthPercentage);
-            score += 2;
-          }
-        }
-
+        // 1. A bounce should always happen on collision.
         const ballCenter = ball.position.clone();
         const blockCenter = block.position.clone();
         const delta = ballCenter.sub(blockCenter);
@@ -622,7 +602,6 @@ function handleCollisions() {
         const dy = Math.abs(delta.y) / halfSize.y;
         const dz = Math.abs(delta.z) / halfSize.z;
 
-        // --- BUG FIX: Apply spin effect to block collisions ---
         if (dx > dy && dx > dz) {
           ballVelocity.x *= -1;
           ballVelocity.y += ballSpin.z * SPIN_BOUNCE_EFFECT;
@@ -636,12 +615,53 @@ function handleCollisions() {
           ballVelocity.x += ballSpin.y * SPIN_BOUNCE_EFFECT;
           ballVelocity.y -= ballSpin.x * SPIN_BOUNCE_EFFECT;
         }
+        ballSpin.multiplyScalar(SPIN_DAMPEN_ON_COLLISION);
 
-        ballSpin.multiplyScalar(SPIN_DAMPEN_ON_COLLISION); // Dampen spin
+        // 2. Then, handle the block's health and destruction.
+        let blockDestroyed = false;
+        if (block.userData.isUnbreakable && !ball.userData.isPowered) {
+          // Unbreakable block hit by normal ball, just bounce. Do nothing else.
+        } else {
+          block.userData.health--;
+
+          if (block.userData.isUnbreakable) {
+            const healthPercentage = block.userData.health / 5;
+            block.material.color
+              .setHex(0xff0000)
+              .lerp(new THREE.Color(POWER_COLOR), 1 - healthPercentage);
+            score += 5;
+          }
+
+          if (block.userData.health <= 0) {
+            blockDestroyed = true; // Mark block for destruction
+            if (block.userData.isSpecial) {
+              createPowerUp(block.position.clone(), block.userData.powerUpType);
+            }
+            createExplosion(block.position.clone(), block.material.color);
+            scene.remove(block);
+            blocks.splice(i, 1);
+            score += block.userData.isUnbreakable ? 50 : 10;
+            if (!block.userData.isUnbreakable) {
+              breakableBlocksLeft--;
+            }
+          } else if (block.userData.isArmored) {
+            const healthPercentage = block.userData.health / 3;
+            block.material.color
+              .setHex(0x888899)
+              .lerp(new THREE.Color(0xff4444), 1 - healthPercentage);
+            score += 2;
+          }
+        }
 
         scoreElement.textContent = score;
         blocksLeftElement.textContent = breakableBlocksLeft;
-        break;
+
+        // 3. Only stop checking for more collisions if the block was NOT destroyed.
+        if (!blockDestroyed) {
+          break;
+        }
+        // If the block was destroyed, we continue the loop to allow the ball
+        // to hit another block right behind it in the same frame.
       }
     }
   }
@@ -691,45 +711,82 @@ function addEventListeners() {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
-  window.addEventListener("mousemove", (event) =>
-    movePaddle(
-      (event.clientX / window.innerWidth) * 2 - 1,
-      -(event.clientY / window.innerHeight) * 2 + 1,
-    ),
-  );
-  window.addEventListener("touchmove", (event) => {
-    if (event.touches.length > 0) {
+  window.addEventListener("mousemove", (event) => {
+    if (!isPointerDown) {
+      // Allow mouse to work when touch is not active
       movePaddle(
-        (event.touches[0].clientX / window.innerWidth) * 2 - 1,
-        -(event.touches[0].clientY / window.innerHeight) * 2 + 1,
+        (event.clientX / window.innerWidth) * 2 - 1,
+        -(event.clientY / window.innerHeight) * 2 + 1,
+        false,
       );
     }
   });
+
+  // --- MODIFIED: Touch event listeners for relative movement ---
+  window.addEventListener(
+    "touchstart",
+    (event) => {
+      if (event.touches.length > 0) {
+        isPointerDown = true;
+        touchStartX = event.touches[0].clientX;
+        touchStartY = event.touches[0].clientY;
+        paddleInitialX = paddleTargetPosition.x;
+        paddleInitialY = paddleTargetPosition.y;
+      }
+    },
+    { passive: false },
+  );
+
+  window.addEventListener(
+    "touchmove",
+    (event) => {
+      event.preventDefault(); // Prevent scrolling
+      if (event.touches.length > 0 && isPointerDown) {
+        const currentX = event.touches[0].clientX;
+        const currentY = event.touches[0].clientY;
+
+        const deltaX = (currentX - touchStartX) * TOUCH_SENSITIVITY;
+        const deltaY = -(currentY - touchStartY) * TOUCH_SENSITIVITY; // Y is inverted
+
+        movePaddle(paddleInitialX + deltaX, paddleInitialY + deltaY, true);
+      }
+    },
+    { passive: false },
+  );
+
+  window.addEventListener("touchend", () => {
+    isPointerDown = false;
+  });
+
   playButton.addEventListener("click", resetGame);
   restartButton.addEventListener("click", resetGame);
 }
 
-function movePaddle(normX, normY) {
+function movePaddle(targetX, targetY, isTouch) {
   if (!isGameActive) return;
 
-  const targetX = normX * PADDLE_SENSITIVITY;
-  const targetY = normY * PADDLE_SENSITIVITY;
+  const sensitivity = isTouch ? 1 : PADDLE_SENSITIVITY;
+
+  const finalTargetX = isTouch ? targetX : targetX * sensitivity;
+  const finalTargetY = isTouch ? targetY : targetY * sensitivity;
+
 
   const paddleRadius = 4;
   const paddleLimitX = TUBE_WIDTH / 2 - (PADDLE_SIZE.x * 1) / 2 + paddleRadius;
   const paddleLimitY = TUBE_HEIGHT / 2 - PADDLE_SIZE.y / 2 + paddleRadius;
 
   paddleTargetPosition.x = THREE.MathUtils.clamp(
-    targetX,
+    finalTargetX,
     -paddleLimitX,
     paddleLimitX,
   );
   paddleTargetPosition.y = THREE.MathUtils.clamp(
-    targetY,
+    finalTargetY,
     -paddleLimitY,
     paddleLimitY,
   );
 }
+
 
 function updatePowerUpTimers(delta) {
   let timerIsActive = false;
@@ -840,8 +897,20 @@ function animate() {
       } else {
         spinHelper.material.opacity = 0; // Hide if no spin
       }
+      // --- MODIFIED: Time Dilation Logic ---
+      let timeScale = 1.0;
+      const distToPaddle = Math.abs(ball.position.z - paddle.position.z);
+      if (velocity.z > 0 && distToPaddle < TIME_DILATION_ZONE_DEPTH) {
+          // Ball is moving towards the paddle and is inside the zone
+          const closeness = 1 - (distToPaddle / TIME_DILATION_ZONE_DEPTH); // 0 to 1
+          // --- MODIFIED: Apply an easing function for a smoother slowdown ---
+          const easedCloseness = closeness * closeness; // Ease-in quad
+          timeScale = THREE.MathUtils.lerp(1.0, TIME_DILATION_FACTOR, easedCloseness);
+      }
 
-      ball.position.add(velocity.clone().multiplyScalar(delta));
+      ball.position.add(velocity.clone().multiplyScalar(delta * timeScale));
+
+
       if (ball.position.z > TUBE_DEPTH / 2 + 20) {
         scene.remove(ball);
         balls.splice(i, 1);
@@ -911,4 +980,4 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-init(); 
+init();
