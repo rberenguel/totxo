@@ -10,7 +10,7 @@ const TUBE_DEPTH = 300;
 
 // --- Time Dilation Configuration ---
 const TIME_DILATION_ZONE_DEPTH = 110; // How close the ball needs to be to the paddle to slow down
-const TIME_DILATION_FACTOR = 0.4; // How much the ball slows down (0.4 = 40% of normal speed)
+const TIME_DILATION_FACTOR = 0.3; // How much the ball slows down (0.4 = 40% of normal speed)
 const TIME_DILATION_BOOST = 1.1; // Speed boost after hitting the paddle to compensate for slowdown
 
 const BLOCK_GRID_X = 10;
@@ -115,9 +115,7 @@ function createWorld() {
   const gridMaterial = new THREE.LineBasicMaterial({
     color: 0x00ffff,
     transparent: true,
-    opacity: 0.6,
-		emissive: 0x00ffff,
-    emissiveIntensity: 0.5,
+    opacity: 0.7,
   });
 
   for (let i = 0; i <= 10; i++) {
@@ -591,81 +589,100 @@ function handleCollisions() {
       const block = blocks[i];
       const blockBox = new THREE.Box3().setFromObject(block);
       if (ballBox.intersectsBox(blockBox)) {
-        // --- MODIFIED: Bug fix for ball passing through blocks ---
+        const isPowered = ball.userData.isPowered;
+        const isUnbreakable = block.userData.isUnbreakable;
 
-        // 1. A bounce should always happen on collision.
-        const ballCenter = ball.position.clone();
-        const blockCenter = block.position.clone();
-        const delta = ballCenter.sub(blockCenter);
-        const halfSize = new THREE.Vector3(
-          BLOCK_SIZE.x / 2,
-          BLOCK_SIZE.y / 2,
-          BLOCK_SIZE.z / 2,
-        );
-        const dx = Math.abs(delta.x) / halfSize.x;
-        const dy = Math.abs(delta.y) / halfSize.y;
-        const dz = Math.abs(delta.z) / halfSize.z;
-
-        if (dx > dy && dx > dz) {
-          ballVelocity.x *= -1;
-          ballVelocity.y += ballSpin.z * SPIN_BOUNCE_EFFECT;
-          ballVelocity.z -= ballSpin.y * SPIN_BOUNCE_EFFECT;
-        } else if (dy > dx && dy > dz) {
-          ballVelocity.y *= -1;
-          ballVelocity.x -= ballSpin.z * SPIN_BOUNCE_EFFECT;
-          ballVelocity.z += ballSpin.x * SPIN_BOUNCE_EFFECT;
+        // NEW: If a powered ball hits a normal block, destroy it instantly and pass through.
+        if (isPowered && !isUnbreakable) {
+          if (block.userData.isSpecial) {
+            createPowerUp(block.position.clone(), block.userData.powerUpType);
+          }
+          createExplosion(block.position.clone(), block.material.color);
+          scene.remove(block);
+          blocks.splice(i, 1);
+          score += 10;
+          breakableBlocksLeft--;
+          // By not breaking here, we allow the ball to continue and hit
+          // any block directly behind this one in the same frame.
         } else {
-          ballVelocity.z *= -1;
-          ballVelocity.x += ballSpin.y * SPIN_BOUNCE_EFFECT;
-          ballVelocity.y -= ballSpin.x * SPIN_BOUNCE_EFFECT;
-        }
-        ballSpin.multiplyScalar(SPIN_DAMPEN_ON_COLLISION);
+          // --- EXISTING LOGIC for non-powered balls or any ball hitting an unbreakable block ---
 
-        // 2. Then, handle the block's health and destruction.
-        let blockDestroyed = false;
-        if (block.userData.isUnbreakable && !ball.userData.isPowered) {
-          // Unbreakable block hit by normal ball, just bounce. Do nothing else.
-        } else {
-          block.userData.health--;
+          // 1. A bounce should always happen on collision in this case.
+          const ballCenter = ball.position.clone();
+          const blockCenter = block.position.clone();
+          const delta = ballCenter.sub(blockCenter);
+          const halfSize = new THREE.Vector3(
+            BLOCK_SIZE.x / 2,
+            BLOCK_SIZE.y / 2,
+            BLOCK_SIZE.z / 2,
+          );
+          const dx = Math.abs(delta.x) / halfSize.x;
+          const dy = Math.abs(delta.y) / halfSize.y;
+          const dz = Math.abs(delta.z) / halfSize.z;
 
-          if (block.userData.isUnbreakable) {
-            const healthPercentage = block.userData.health / 5;
-            block.material.color
-              .setHex(0xff0000)
-              .lerp(new THREE.Color(POWER_COLOR), 1 - healthPercentage);
-            score += 5;
+          if (dx > dy && dx > dz) {
+            ballVelocity.x *= -1;
+            ballVelocity.y += ballSpin.z * SPIN_BOUNCE_EFFECT;
+            ballVelocity.z -= ballSpin.y * SPIN_BOUNCE_EFFECT;
+          } else if (dy > dx && dy > dz) {
+            ballVelocity.y *= -1;
+            ballVelocity.x -= ballSpin.z * SPIN_BOUNCE_EFFECT;
+            ballVelocity.z += ballSpin.x * SPIN_BOUNCE_EFFECT;
+          } else {
+            ballVelocity.z *= -1;
+            ballVelocity.x += ballSpin.y * SPIN_BOUNCE_EFFECT;
+            ballVelocity.y -= ballSpin.x * SPIN_BOUNCE_EFFECT;
+          }
+          ballSpin.multiplyScalar(SPIN_DAMPEN_ON_COLLISION);
+
+          // 2. Then, handle the block's health and destruction.
+          let blockDestroyed = false;
+          if (isUnbreakable && !isPowered) {
+            // Unbreakable block hit by normal ball, just bounce. Do nothing else.
+          } else {
+            block.userData.health--;
+
+            if (isUnbreakable) { // This means it was an unbreakable hit by a powered ball
+              const healthPercentage = block.userData.health / 5;
+              block.material.color
+                .setHex(0xff0000)
+                .lerp(new THREE.Color(POWER_COLOR), 1 - healthPercentage);
+              score += 5;
+            }
+
+            if (block.userData.health <= 0) {
+              blockDestroyed = true; // Mark block for destruction
+              if (block.userData.isSpecial) {
+                createPowerUp(
+                  block.position.clone(),
+                  block.userData.powerUpType,
+                );
+              }
+              createExplosion(block.position.clone(), block.material.color);
+              scene.remove(block);
+              blocks.splice(i, 1);
+              score += isUnbreakable ? 50 : 10;
+              if (!isUnbreakable) {
+                breakableBlocksLeft--;
+              }
+            } else if (block.userData.isArmored) {
+              const healthPercentage = block.userData.health / 3;
+              block.material.color
+                .setHex(0x888899)
+                .lerp(new THREE.Color(0xff4444), 1 - healthPercentage);
+              score += 2;
+            }
           }
 
-          if (block.userData.health <= 0) {
-            blockDestroyed = true; // Mark block for destruction
-            if (block.userData.isSpecial) {
-              createPowerUp(block.position.clone(), block.userData.powerUpType);
-            }
-            createExplosion(block.position.clone(), block.material.color);
-            scene.remove(block);
-            blocks.splice(i, 1);
-            score += block.userData.isUnbreakable ? 50 : 10;
-            if (!block.userData.isUnbreakable) {
-              breakableBlocksLeft--;
-            }
-          } else if (block.userData.isArmored) {
-            const healthPercentage = block.userData.health / 3;
-            block.material.color
-              .setHex(0x888899)
-              .lerp(new THREE.Color(0xff4444), 1 - healthPercentage);
-            score += 2;
+          // 3. Only stop checking for more collisions if the block was NOT destroyed.
+          if (!blockDestroyed) {
+            break;
           }
         }
-
+        
+        // Update UI elements after any block interaction
         scoreElement.textContent = score;
         blocksLeftElement.textContent = breakableBlocksLeft;
-
-        // 3. Only stop checking for more collisions if the block was NOT destroyed.
-        if (!blockDestroyed) {
-          break;
-        }
-        // If the block was destroyed, we continue the loop to allow the ball
-        // to hit another block right behind it in the same frame.
       }
     }
   }
