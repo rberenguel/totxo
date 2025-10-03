@@ -10,7 +10,7 @@ const TUBE_DEPTH = 300;
 
 // --- Time Dilation Configuration ---
 const TIME_DILATION_ZONE_DEPTH = 110; // How close the ball needs to be to the paddle to slow down
-const TIME_DILATION_FACTOR = 0.3; // How much the ball slows down (0.4 = 40% of normal speed)
+const TIME_DILATION_FACTOR = 0.4; // How much the ball slows down (0.4 = 40% of normal speed)
 const TIME_DILATION_BOOST = 1.1; // Speed boost after hitting the paddle to compensate for slowdown
 
 const BLOCK_GRID_X = 10;
@@ -19,8 +19,8 @@ const BLOCK_GRID_Z = 4;
 
 
 const SPIN_FACTOR = 0.08; // How much paddle velocity translates to spin
-const MAX_SPIN = 60; // Maximum spin magnitude
-const MAGNUS_COEFFICIENT = 0.0001; // Strength of the curve effect
+const MAX_SPIN = 50; // Maximum spin magnitude
+const MAGNUS_COEFFICIENT = 0.0007; // Strength of the curve effect
 const SPIN_BOUNCE_EFFECT = 0.1; // How much spin affects wall rebounds
 const SPIN_DECAY = 0.1; // How quickly spin wears off over time
 const SPIN_POWER_THRESHOLD = MAX_SPIN * 0.5; // Spin needed to activate power mode
@@ -116,6 +116,8 @@ function createWorld() {
     color: 0x00ffff,
     transparent: true,
     opacity: 0.6,
+		emissive: 0x00ffff,
+    emissiveIntensity: 0.5,
   });
 
   for (let i = 0; i <= 10; i++) {
@@ -262,6 +264,8 @@ function createBall(position, velocity) {
   const ballMaterial = new THREE.MeshStandardMaterial({
     color: 0xcccc00,
     roughness: 0.5,
+		emissive: 0xcccc00,
+    emissiveIntensity: 0.5,
   });
   const ball = new THREE.Mesh(
     new THREE.SphereGeometry(BALL_RADIUS, 32, 32),
@@ -870,7 +874,7 @@ function animate() {
         ball.material.emissive.setHex(POWER_COLOR);
         spinHelper.material.color.setHex(POWER_COLOR);
       } else {
-        ball.material.emissive.setHex(0x000000); // Reset emissive
+        ball.material.emissive.setHex(0xcccc00); // Reset emissive
         spinHelper.material.color.setHex(0x00ffff); // Reset helper color
       }
       // Apply Magnus Force (curve) and Spin Decay
